@@ -7,11 +7,13 @@ import {
   getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot
 } from 'firebase/firestore';
 import {
-  Users, Lock, Unlock, Download, Search, Calendar, FileText,
+  Users, Download, Search, Calendar, FileText,
   CheckCircle, XCircle, TrendingUp, UserCheck, PieChart,
   LayoutGrid, CreditCard, ArrowUpRight, ChevronsLeftRight,
   UserPlus, Trash2, Edit3, Save, Moon, Sun, Shield,
-  AlertTriangle, Check, Settings, ChevronLeft, X
+  AlertTriangle, Check, Settings, ChevronLeft, X,
+  Lock, Unlock, ArrowDownRight, Wallet, Receipt,
+  Plus, Tag, AlignLeft, TrendingDown, Scale
 } from 'lucide-react';
 
 const _fbc = {
@@ -65,8 +67,15 @@ const SEED_NAMES = [
 const MONTHS = ["January","February","March","April","May","June",
   "July","August","September","October","November","December"];
 
+const EXPENSE_CATEGORIES = [
+  "Food & Catering","Medical","Education","Event","Utilities",
+  "Transport","Maintenance","Charity / Sadaka","Emergency","Other"
+];
+
 const mkInitials = (n) => n.split(' ').filter(Boolean).map(w=>w[0]).join('').slice(0,2).toUpperCase();
 const mkId = (name) => `member-${name.toLowerCase().replace(/[^a-z0-9]/g,'').slice(0,10)}-${Date.now()}`;
+const mkExpId = () => `exp-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
+const fmtDate = (iso) => { const d = new Date(iso); return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); };
 
 const T = {
   light: {
@@ -77,6 +86,7 @@ const T = {
     emerald:'#10B981', emeraldLight:'#ECFDF5',
     rose:'#F43F5E', roseLight:'#FFF1F2',
     amber:'#D97706', amberLight:'#FFFBEB',
+    violet:'#7C3AED', violetLight:'#F5F3FF',
     headerBg:'#FFFFFF',
     sh:'0 1px 3px rgba(0,0,0,0.06)', shMd:'0 4px 20px rgba(0,0,0,0.09)', shLg:'0 12px 40px rgba(0,0,0,0.14)',
   },
@@ -88,6 +98,7 @@ const T = {
     emerald:'#10B981', emeraldLight:'#022C22',
     rose:'#F43F5E', roseLight:'#1F0714',
     amber:'#F59E0B', amberLight:'#1C1501',
+    violet:'#8B5CF6', violetLight:'#1E1B4B',
     headerBg:'#161B26',
     sh:'0 1px 3px rgba(0,0,0,0.3)', shMd:'0 4px 20px rgba(0,0,0,0.45)', shLg:'0 12px 40px rgba(0,0,0,0.6)',
   }
@@ -107,6 +118,7 @@ export default function App() {
   const [toast, setToast] = useState(null);
   const [data, setData] = useState({});
   const [members, setMembers] = useState([]);
+  const [expenses, setExpenses] = useState([]);
   const [addModal, setAddModal] = useState(false);
   const [addName, setAddName] = useState('');
   const [editModal, setEditModal] = useState(null);
@@ -114,6 +126,10 @@ export default function App() {
   const [delConfirm, setDelConfirm] = useState(null);
   const [manageView, setManageView] = useState(false);
   const [manageSearch, setManageSearch] = useState('');
+  const [expenseView, setExpenseView] = useState(false);
+  const [expenseModal, setExpenseModal] = useState(false);
+  const [expDelConfirm, setExpDelConfirm] = useState(null);
+  const [expForm, setExpForm] = useState({ description:'', amount:'', category: EXPENSE_CATEGORIES[0], date: new Date().toISOString().slice(0,10) });
   const tRef = useRef(null);
   const t = dark ? T.dark : T.light;
 
@@ -155,6 +171,17 @@ export default function App() {
       snap.forEach(d => { nd[d.id] = d.data(); });
       setData(nd);
     }, () => toast$('Sync error', 'error'));
+  }, [user]);
+
+  // Expenses listener
+  useEffect(() => {
+    if (!user) return;
+    return onSnapshot(collection(_db, 'artifacts', _aid, 'public', 'data', 'expenses'), (snap) => {
+      const list = [];
+      snap.forEach(d => list.push({ id: d.id, ...d.data() }));
+      list.sort((a,b) => new Date(b.date) - new Date(a.date));
+      setExpenses(list);
+    }, () => toast$('Expense sync error', 'error'));
   }, [user]);
 
   const handleLogin = (e) => {
@@ -205,6 +232,31 @@ export default function App() {
     } catch { toast$('Failed to remove', 'error'); }
   };
 
+  const handleAddExpense = async () => {
+    if (!expForm.description.trim() || !expForm.amount || !role) return;
+    try {
+      const id = mkExpId();
+      await setDoc(doc(_db, 'artifacts', _aid, 'public', 'data', 'expenses', id), {
+        description: expForm.description.trim(),
+        amount: parseFloat(expForm.amount) || 0,
+        category: expForm.category,
+        date: expForm.date,
+        addedBy: role,
+        createdAt: Date.now()
+      });
+      setExpenseModal(false);
+      setExpForm({ description:'', amount:'', category: EXPENSE_CATEGORIES[0], date: new Date().toISOString().slice(0,10) });
+      toast$('Expense recorded');
+    } catch { toast$('Failed to save expense', 'error'); }
+  };
+
+  const handleDeleteExpense = async (id) => {
+    try {
+      await deleteDoc(doc(_db, 'artifacts', _aid, 'public', 'data', 'expenses', id));
+      setExpDelConfirm(null); toast$('Expense removed');
+    } catch { toast$('Failed to remove', 'error'); }
+  };
+
   const dashList = useMemo(() => {
     const f = members.filter(p => {
       const ms = p.name.toLowerCase().includes(search.toLowerCase());
@@ -229,22 +281,32 @@ export default function App() {
     const mTotal = members.reduce((s,p) => s+(data[p.id]?.[month]||0), 0);
     const paid = members.filter(p => (data[p.id]?.[month]||0) > 0).length;
     const annual = members.reduce((s,p) => s+MONTHS.reduce((ms,m)=>ms+(data[p.id]?.[m]||0),0), 0);
-    return { mTotal, paid, annual, total: members.length };
-  }, [members, data, month]);
+    const totalExpenses = expenses.reduce((s,e) => s + (e.amount||0), 0);
+    const monthExpenses = expenses.filter(e => {
+      const d = new Date(e.date);
+      return MONTHS[d.getMonth()] === month && d.getFullYear() === new Date().getFullYear();
+    }).reduce((s,e) => s+(e.amount||0), 0);
+    const balance = annual - totalExpenses;
+    return { mTotal, paid, annual, total: members.length, totalExpenses, monthExpenses, balance };
+  }, [members, data, month, expenses]);
 
   const pct = stats.total ? Math.round(stats.paid/stats.total*100) : 0;
+  const balancePct = stats.annual > 0 ? Math.max(0, Math.round((stats.balance/stats.annual)*100)) : 0;
 
   const exportCSV = () => {
     let csv, fn;
     if (view === 'dashboard') {
       csv = 'Name,Month,Amount (NGN)\n' + members.map(p => `"${p.name}",${month},${data[p.id]?.[month]||0}`).join('\n');
       fn = `AYakasai_${month}.csv`;
-    } else {
+    } else if (view === 'master') {
       csv = 'Name,'+MONTHS.join(',')+',Annual Total\n' + members.map(p => {
         const vs = MONTHS.map(m => data[p.id]?.[m]||0);
         return `"${p.name}",${vs.join(',')},${vs.reduce((a,b)=>a+b,0)}`;
       }).join('\n');
       fn = 'AYakasai_Master.csv';
+    } else {
+      csv = 'Date,Category,Description,Amount (NGN)\n' + expenses.map(e => `"${e.date}","${e.category}","${e.description}",${e.amount}`).join('\n');
+      fn = 'AYakasai_Expenses.csv';
     }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}));
@@ -263,8 +325,8 @@ export default function App() {
     select{-webkit-appearance:none;appearance:none}
     .fi{animation:fi .25s ease}
     @keyframes fi{from{opacity:0;transform:translateY(5px)}to{opacity:1;transform:translateY(0)}}
-    .su{animation:su .32s cubic-bezier(.16,1,.3,1)}
-    @keyframes su{from{opacity:0;transform:translateY(18px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}
+    .su{animation:su .35s cubic-bezier(.16,1,.3,1)}
+    @keyframes su{from{opacity:0;transform:translateY(24px)}to{opacity:1;transform:translateY(0)}}
     .ti{animation:ti .3s cubic-bezier(.16,1,.3,1)}
     @keyframes ti{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:translateX(0)}}
     .ch:hover{transform:translateY(-1px);box-shadow:${t.shMd}}
@@ -273,17 +335,16 @@ export default function App() {
     .bp{transition:opacity .1s,transform .1s}
     .rf:focus{outline:none;box-shadow:0 0 0 3px ${t.accent}44}
     .rf{transition:border-color .15s,box-shadow .15s}
-    .mbi:hover{background:${t.surfaceAlt}!important}
     @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
     .pl{animation:pulse 2s infinite}
     .rh:hover{background:${t.surfaceAlt}!important}
   `;
 
-  // Shared modals used in both views
-  const Modals = () => (
+  // ── SHARED MODALS ──
+  const MemberModals = () => (
     <>
       {addModal && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(8px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&(setAddModal(false),setAddName(''))}>
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',backdropFilter:'blur(10px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&(setAddModal(false),setAddName(''))}>
           <div className="su" style={{background:t.surface,borderRadius:'22px 22px 0 0',width:'100%',maxWidth:520,boxShadow:t.shLg}}>
             <div style={{background:'linear-gradient(135deg,#78350F,#D97706)',padding:'20px 20px 16px',borderRadius:'22px 22px 0 0'}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
@@ -307,9 +368,8 @@ export default function App() {
           </div>
         </div>
       )}
-
       {editModal && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(8px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&setEditModal(null)}>
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',backdropFilter:'blur(10px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&setEditModal(null)}>
           <div className="su" style={{background:t.surface,borderRadius:'22px 22px 0 0',width:'100%',maxWidth:520,boxShadow:t.shLg}}>
             <div style={{background:'linear-gradient(135deg,#0F3460,#1A6BAE)',padding:'20px 20px 16px',borderRadius:'22px 22px 0 0'}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
@@ -333,13 +393,10 @@ export default function App() {
           </div>
         </div>
       )}
-
       {delConfirm && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(8px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&setDelConfirm(null)}>
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',backdropFilter:'blur(10px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&setDelConfirm(null)}>
           <div className="su" style={{background:t.surface,borderRadius:'22px 22px 0 0',width:'100%',maxWidth:520,boxShadow:t.shLg,padding:'28px 20px 40px',textAlign:'center'}}>
-            <div style={{width:52,height:52,borderRadius:99,background:t.roseLight,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}>
-              <AlertTriangle size={22} color={t.rose}/>
-            </div>
+            <div style={{width:52,height:52,borderRadius:99,background:t.roseLight,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}><AlertTriangle size={22} color={t.rose}/></div>
             <div style={{fontFamily:"'Outfit',sans-serif",fontSize:18,fontWeight:800,color:t.text,marginBottom:8}}>Remove Member?</div>
             <div style={{fontSize:13,color:t.textMed,marginBottom:22,lineHeight:1.6,padding:'0 8px'}}>
               This will permanently remove <strong>{members.find(m=>m.id===delConfirm)?.name}</strong> and all their contribution history.
@@ -354,26 +411,15 @@ export default function App() {
     </>
   );
 
-  // ── MANAGE MEMBERS VIEW (superadmin only) ──
+  // ── MANAGE MEMBERS VIEW ──
   if (manageView && role === 'superadmin') {
     return (
       <div style={{minHeight:'100vh',background:t.bg,color:t.text,fontFamily:"'DM Sans',sans-serif",display:'flex',flexDirection:'column',overflowX:'hidden'}}>
         <style>{css}</style>
-
-        {toast && (
-          <div style={{position:'fixed',top:16,right:16,zIndex:100,maxWidth:'calc(100vw - 32px)'}} className="ti">
-            <div style={{display:'flex',alignItems:'center',gap:9,padding:'11px 16px',borderRadius:14,background:toast.type==='error'?t.roseLight:t.emeraldLight,border:`1px solid ${toast.type==='error'?t.rose+'44':t.emerald+'44'}`,color:toast.type==='error'?t.rose:t.emerald,fontSize:13,fontWeight:600,boxShadow:t.shMd}}>
-              {toast.type==='error'?<XCircle size={15}/>:<CheckCircle size={15}/>}
-              <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{toast.msg}</span>
-            </div>
-          </div>
-        )}
-
+        {toast && <Toast toast={toast} t={t}/>}
         <header style={{background:t.headerBg,borderBottom:`1px solid ${t.border}`,position:'sticky',top:0,zIndex:40,boxShadow:t.sh}}>
           <div style={{maxWidth:900,margin:'0 auto',padding:'0 16px',display:'flex',alignItems:'center',gap:12,height:60}}>
-            <button onClick={()=>setManageView(false)} className="bp" style={{width:36,height:36,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${t.border}`,background:t.surface,cursor:'pointer',color:t.textMed,flexShrink:0}}>
-              <ChevronLeft size={17}/>
-            </button>
+            <button onClick={()=>setManageView(false)} className="bp" style={{width:36,height:36,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${t.border}`,background:t.surface,cursor:'pointer',color:t.textMed,flexShrink:0}}><ChevronLeft size={17}/></button>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontFamily:"'Outfit',sans-serif",fontWeight:800,fontSize:16,color:t.text,lineHeight:1}}>Manage Members</div>
               <div style={{fontSize:10,color:t.textMuted,marginTop:2}}>{members.length} total members</div>
@@ -383,13 +429,11 @@ export default function App() {
             </button>
           </div>
         </header>
-
         <div style={{flex:1,maxWidth:900,margin:'0 auto',width:'100%',padding:'16px 16px 100px'}}>
           <div style={{position:'relative',marginBottom:14}}>
             <Search size={15} color={t.textMuted} style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',pointerEvents:'none'}}/>
             <input style={{width:'100%',paddingLeft:40,paddingRight:14,height:44,borderRadius:13,border:`1px solid ${t.border}`,background:t.surface,color:t.text,fontSize:14,fontWeight:500,outline:'none'}} className="rf" placeholder="Search member…" value={manageSearch} onChange={e=>setManageSearch(e.target.value)}/>
           </div>
-
           <div style={{background:t.surface,border:`1px solid ${t.border}`,borderRadius:18,overflow:'hidden',boxShadow:t.sh}}>
             {manageList.length === 0 ? (
               <div style={{padding:'48px 20px',textAlign:'center',color:t.textMuted,display:'flex',flexDirection:'column',alignItems:'center',gap:10}}>
@@ -398,30 +442,195 @@ export default function App() {
             ) : manageList.map((person, i) => {
               const annualTotal = MONTHS.reduce((s,m)=>s+(data[person.id]?.[m]||0),0);
               return (
-                <div key={person.id} style={{display:'flex',alignItems:'center',gap:12,padding:'13px 16px',borderBottom:i<manageList.length-1?`1px solid ${t.border}`:'none',transition:'background .1s'}}>
-                  <div style={{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Outfit',sans-serif",fontSize:12,fontWeight:800,background:t.accentLight,color:t.accent,flexShrink:0}}>
-                    {person.initials}
-                  </div>
+                <div key={person.id} style={{display:'flex',alignItems:'center',gap:12,padding:'13px 16px',borderBottom:i<manageList.length-1?`1px solid ${t.border}`:'none'}}>
+                  <div style={{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Outfit',sans-serif",fontSize:12,fontWeight:800,background:t.accentLight,color:t.accent,flexShrink:0}}>{person.initials}</div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,fontWeight:600,color:t.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{person.name}</div>
-                    <div style={{fontSize:11,color:t.textMuted,marginTop:2}}>
-                      {annualTotal > 0 ? `₦${annualTotal.toLocaleString()} total` : 'No contributions yet'}
-                    </div>
+                    <div style={{fontSize:11,color:t.textMuted,marginTop:2}}>{annualTotal > 0 ? `₦${annualTotal.toLocaleString()} total` : 'No contributions yet'}</div>
                   </div>
                   <div style={{display:'flex',gap:7,flexShrink:0}}>
-                    <button onClick={()=>{setEditModal({id:person.id,name:person.name});setEditName(person.name);}} className="bp" style={{width:36,height:36,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${t.border}`,background:t.surfaceAlt,cursor:'pointer',color:t.textMed}}>
-                      <Edit3 size={14}/>
-                    </button>
-                    <button onClick={()=>setDelConfirm(person.id)} className="bp" style={{width:36,height:36,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${t.rose}44`,background:t.roseLight,cursor:'pointer',color:t.rose}}>
-                      <Trash2 size={14}/>
-                    </button>
+                    <button onClick={()=>{setEditModal({id:person.id,name:person.name});setEditName(person.name);}} className="bp" style={{width:36,height:36,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${t.border}`,background:t.surfaceAlt,cursor:'pointer',color:t.textMed}}><Edit3 size={14}/></button>
+                    <button onClick={()=>setDelConfirm(person.id)} className="bp" style={{width:36,height:36,borderRadius:9,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${t.rose}44`,background:t.roseLight,cursor:'pointer',color:t.rose}}><Trash2 size={14}/></button>
                   </div>
                 </div>
               );
             })}
           </div>
         </div>
-        <Modals/>
+        <MemberModals/>
+      </div>
+    );
+  }
+
+  // ── EXPENSES VIEW ──
+  if (expenseView) {
+    const catTotals = EXPENSE_CATEGORIES.map(cat => ({
+      cat,
+      total: expenses.filter(e=>e.category===cat).reduce((s,e)=>s+e.amount,0)
+    })).filter(x=>x.total>0).sort((a,b)=>b.total-a.total);
+
+    return (
+      <div style={{minHeight:'100vh',background:t.bg,color:t.text,fontFamily:"'DM Sans',sans-serif",display:'flex',flexDirection:'column',overflowX:'hidden'}}>
+        <style>{css}</style>
+        {toast && <Toast toast={toast} t={t}/>}
+
+        <header style={{background:t.headerBg,borderBottom:`1px solid ${t.border}`,position:'sticky',top:0,zIndex:40,boxShadow:t.sh}}>
+          <div style={{maxWidth:900,margin:'0 auto',padding:'0 16px',display:'flex',alignItems:'center',gap:12,height:60}}>
+            <button onClick={()=>setExpenseView(false)} className="bp" style={{width:36,height:36,borderRadius:10,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${t.border}`,background:t.surface,cursor:'pointer',color:t.textMed,flexShrink:0}}><ChevronLeft size={17}/></button>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontFamily:"'Outfit',sans-serif",fontWeight:800,fontSize:16,color:t.text,lineHeight:1}}>Expenses</div>
+              <div style={{fontSize:10,color:t.textMuted,marginTop:2}}>₦{stats.totalExpenses.toLocaleString()} total outgoing</div>
+            </div>
+            <button onClick={exportCSV} className="bp" style={{display:'flex',alignItems:'center',gap:6,height:36,padding:'0 12px',borderRadius:10,border:`1px solid ${t.border}`,background:t.surface,color:t.textMed,fontSize:12,fontWeight:600,cursor:'pointer',flexShrink:0}}>
+              <Download size={13}/>CSV
+            </button>
+            {role && (
+              <button onClick={()=>setExpenseModal(true)} className="bp" style={{display:'flex',alignItems:'center',gap:6,height:36,padding:'0 14px',borderRadius:10,border:`1px solid ${t.rose}55`,background:t.roseLight,color:t.rose,fontSize:13,fontWeight:700,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap'}}>
+                <Plus size={14}/>Add
+              </button>
+            )}
+          </div>
+        </header>
+
+        <div style={{flex:1,maxWidth:900,margin:'0 auto',width:'100%',padding:'16px 16px 100px'}}>
+
+          {/* Balance summary cards */}
+          <div style={{display:'grid',gridTemplateColumns:'repeat(3,1fr)',gap:10,marginBottom:18}}>
+            <div style={{background:`linear-gradient(135deg,${t.emerald},#059669)`,borderRadius:16,padding:'13px 14px',boxShadow:`0 6px 24px ${t.emerald}44`}}>
+              <div style={{width:32,height:32,borderRadius:8,background:'rgba(255,255,255,0.18)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:9}}><TrendingUp size={14} color="#fff"/></div>
+              <div style={{fontFamily:"'Outfit',sans-serif",fontSize:15,fontWeight:800,color:'#fff',lineHeight:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>₦{stats.annual.toLocaleString()}</div>
+              <div style={{fontSize:9,fontWeight:700,color:'rgba(255,255,255,0.7)',textTransform:'uppercase',letterSpacing:'0.1em',marginTop:4}}>Total In</div>
+            </div>
+            <div style={{background:`linear-gradient(135deg,${t.rose},#E11D48)`,borderRadius:16,padding:'13px 14px',boxShadow:`0 6px 24px ${t.rose}44`}}>
+              <div style={{width:32,height:32,borderRadius:8,background:'rgba(255,255,255,0.18)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:9}}><TrendingDown size={14} color="#fff"/></div>
+              <div style={{fontFamily:"'Outfit',sans-serif",fontSize:15,fontWeight:800,color:'#fff',lineHeight:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>₦{stats.totalExpenses.toLocaleString()}</div>
+              <div style={{fontSize:9,fontWeight:700,color:'rgba(255,255,255,0.7)',textTransform:'uppercase',letterSpacing:'0.1em',marginTop:4}}>Total Out</div>
+            </div>
+            <div style={{
+              background: stats.balance >= 0
+                ? `linear-gradient(135deg,${t.accent},#7C3AED)`
+                : `linear-gradient(135deg,#DC2626,#991B1B)`,
+              borderRadius:16,padding:'13px 14px',
+              boxShadow:`0 6px 24px ${stats.balance>=0?t.accent+'44':'#DC262644'}`
+            }}>
+              <div style={{width:32,height:32,borderRadius:8,background:'rgba(255,255,255,0.18)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:9}}><Scale size={14} color="#fff"/></div>
+              <div style={{fontFamily:"'Outfit',sans-serif",fontSize:15,fontWeight:800,color:'#fff',lineHeight:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>₦{Math.abs(stats.balance).toLocaleString()}</div>
+              <div style={{fontSize:9,fontWeight:700,color:'rgba(255,255,255,0.7)',textTransform:'uppercase',letterSpacing:'0.1em',marginTop:4}}>{stats.balance>=0?'Balance':'Deficit'}</div>
+            </div>
+          </div>
+
+          {/* Category breakdown */}
+          {catTotals.length > 0 && (
+            <div style={{background:t.surface,border:`1px solid ${t.border}`,borderRadius:16,padding:'14px 16px',marginBottom:16,boxShadow:t.sh}}>
+              <div style={{fontSize:11,fontWeight:700,color:t.textMuted,textTransform:'uppercase',letterSpacing:'0.1em',marginBottom:12}}>Breakdown by Category</div>
+              <div style={{display:'flex',flexDirection:'column',gap:8}}>
+                {catTotals.map(({cat,total}) => {
+                  const pct = Math.round((total/stats.totalExpenses)*100);
+                  return (
+                    <div key={cat}>
+                      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+                        <span style={{fontSize:12,fontWeight:600,color:t.text}}>{cat}</span>
+                        <span style={{fontSize:12,fontWeight:700,color:t.rose}}>₦{total.toLocaleString()} <span style={{color:t.textMuted,fontWeight:500}}>({pct}%)</span></span>
+                      </div>
+                      <div style={{height:4,borderRadius:99,background:t.border,overflow:'hidden'}}>
+                        <div style={{height:'100%',borderRadius:99,background:`linear-gradient(90deg,${t.rose},#FB7185)`,width:`${pct}%`,transition:'width .6s ease'}}/>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Expense list */}
+          <div style={{background:t.surface,border:`1px solid ${t.border}`,borderRadius:16,overflow:'hidden',boxShadow:t.sh}}>
+            {expenses.length === 0 ? (
+              <div style={{padding:'52px 20px',textAlign:'center',color:t.textMuted,display:'flex',flexDirection:'column',alignItems:'center',gap:12}}>
+                <Receipt size={30} color={t.border}/>
+                <div style={{fontWeight:700,fontSize:14}}>No expenses recorded yet</div>
+                {role && <div style={{fontSize:12}}>Tap "Add" to log your first expense</div>}
+              </div>
+            ) : expenses.map((exp, i) => (
+              <div key={exp.id} style={{display:'flex',alignItems:'center',gap:12,padding:'13px 16px',borderBottom:i<expenses.length-1?`1px solid ${t.border}`:'none'}}>
+                <div style={{width:40,height:40,borderRadius:11,background:t.roseLight,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
+                  <Receipt size={16} color={t.rose}/>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:600,color:t.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{exp.description}</div>
+                  <div style={{display:'flex',alignItems:'center',gap:6,marginTop:3,flexWrap:'wrap'}}>
+                    <span style={{fontSize:10,fontWeight:700,color:t.rose,background:t.roseLight,borderRadius:5,padding:'2px 6px'}}>{exp.category}</span>
+                    <span style={{fontSize:10,color:t.textMuted}}>{fmtDate(exp.date)}</span>
+                  </div>
+                </div>
+                <div style={{display:'flex',alignItems:'center',gap:8,flexShrink:0}}>
+                  <div style={{fontFamily:"'Outfit',sans-serif",fontSize:14,fontWeight:800,color:t.rose}}>₦{exp.amount.toLocaleString()}</div>
+                  {role==='superadmin' && (
+                    <button onClick={()=>setExpDelConfirm(exp.id)} className="bp" style={{width:30,height:30,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',border:`1px solid ${t.rose}44`,background:t.roseLight,cursor:'pointer',color:t.rose}}>
+                      <Trash2 size={12}/>
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Add expense bottom sheet */}
+        {expenseModal && (
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',backdropFilter:'blur(10px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&setExpenseModal(false)}>
+            <div className="su" style={{background:t.surface,borderRadius:'22px 22px 0 0',width:'100%',maxWidth:520,boxShadow:t.shLg}}>
+              <div style={{background:'linear-gradient(135deg,#9F1239,#F43F5E)',padding:'20px 20px 16px',borderRadius:'22px 22px 0 0'}}>
+                <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
+                  <div style={{display:'flex',alignItems:'center',gap:10}}>
+                    <div style={{width:38,height:38,borderRadius:10,background:'rgba(255,255,255,0.15)',display:'flex',alignItems:'center',justifyContent:'center'}}><Receipt size={17} color="#fff"/></div>
+                    <div>
+                      <div style={{fontFamily:"'Outfit',sans-serif",fontSize:16,fontWeight:800,color:'#fff',lineHeight:1}}>Log Expense</div>
+                      <div style={{fontSize:11,color:'#FECDD3',marginTop:2}}>Deducted from balance</div>
+                    </div>
+                  </div>
+                  <button onClick={()=>setExpenseModal(false)} style={{width:28,height:28,borderRadius:8,display:'flex',alignItems:'center',justifyContent:'center',background:'rgba(255,255,255,0.15)',border:'none',cursor:'pointer',color:'#fff'}}><X size={14}/></button>
+                </div>
+              </div>
+              <div style={{padding:'16px 20px 36px',display:'flex',flexDirection:'column',gap:10}}>
+                <input style={{width:'100%',height:46,background:t.surfaceAlt,border:`1.5px solid ${t.border}`,borderRadius:13,padding:'0 15px',fontSize:14,fontWeight:500,color:t.text,outline:'none'}} className="rf" placeholder="Description (e.g. Eid food supplies)" value={expForm.description} onChange={e=>setExpForm(f=>({...f,description:e.target.value}))} autoFocus/>
+                <div style={{display:'flex',gap:9}}>
+                  <div style={{position:'relative',flex:1}}>
+                    <span style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',fontSize:14,color:t.textMuted,fontWeight:600,pointerEvents:'none'}}>₦</span>
+                    <input type="number" style={{width:'100%',height:46,background:t.surfaceAlt,border:`1.5px solid ${t.border}`,borderRadius:13,padding:'0 15px 0 28px',fontSize:14,fontWeight:700,color:t.text,outline:'none'}} className="rf" placeholder="Amount" value={expForm.amount} onChange={e=>setExpForm(f=>({...f,amount:e.target.value}))}/>
+                  </div>
+                  <input type="date" style={{flex:1,height:46,background:t.surfaceAlt,border:`1.5px solid ${t.border}`,borderRadius:13,padding:'0 12px',fontSize:13,fontWeight:500,color:t.text,outline:'none'}} className="rf" value={expForm.date} onChange={e=>setExpForm(f=>({...f,date:e.target.value}))}/>
+                </div>
+                <div style={{position:'relative'}}>
+                  <Tag size={14} color={t.textMuted} style={{position:'absolute',left:14,top:'50%',transform:'translateY(-50%)',pointerEvents:'none'}}/>
+                  <select style={{width:'100%',height:46,background:t.surfaceAlt,border:`1.5px solid ${t.border}`,borderRadius:13,padding:'0 15px 0 36px',fontSize:14,fontWeight:500,color:t.text,outline:'none',cursor:'pointer'}} className="rf" value={expForm.category} onChange={e=>setExpForm(f=>({...f,category:e.target.value}))}>
+                    {EXPENSE_CATEGORIES.map(c=><option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+                <div style={{display:'flex',gap:9,marginTop:4}}>
+                  <button onClick={()=>setExpenseModal(false)} style={{flex:1,height:46,borderRadius:13,background:'transparent',color:t.textMed,fontSize:14,fontWeight:600,border:`1px solid ${t.border}`,cursor:'pointer'}}>Cancel</button>
+                  <button onClick={handleAddExpense} style={{flex:2,height:46,borderRadius:13,background:`linear-gradient(135deg,#9F1239,#F43F5E)`,color:'#fff',fontSize:14,fontWeight:700,border:'none',cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'center',gap:7}}>
+                    <Receipt size={15}/>Record Expense
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Delete expense confirm */}
+        {expDelConfirm && (
+          <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',backdropFilter:'blur(10px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&setExpDelConfirm(null)}>
+            <div className="su" style={{background:t.surface,borderRadius:'22px 22px 0 0',width:'100%',maxWidth:520,boxShadow:t.shLg,padding:'28px 20px 40px',textAlign:'center'}}>
+              <div style={{width:52,height:52,borderRadius:99,background:t.roseLight,display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 14px'}}><AlertTriangle size={22} color={t.rose}/></div>
+              <div style={{fontFamily:"'Outfit',sans-serif",fontSize:18,fontWeight:800,color:t.text,marginBottom:8}}>Remove Expense?</div>
+              <div style={{fontSize:13,color:t.textMed,marginBottom:22,lineHeight:1.6}}>This will permanently delete this expense record.</div>
+              <div style={{display:'flex',gap:10}}>
+                <button onClick={()=>setExpDelConfirm(null)} style={{flex:1,height:46,borderRadius:13,background:'transparent',color:t.textMed,fontSize:14,fontWeight:600,border:`1px solid ${t.border}`,cursor:'pointer'}}>Cancel</button>
+                <button onClick={()=>handleDeleteExpense(expDelConfirm)} style={{flex:1,height:46,borderRadius:13,background:t.roseLight,color:t.rose,fontSize:14,fontWeight:700,border:`1px solid ${t.rose}44`,cursor:'pointer'}}>Remove</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -431,16 +640,9 @@ export default function App() {
     <div style={{minHeight:'100vh',background:t.bg,color:t.text,fontFamily:"'DM Sans',sans-serif",transition:'background .2s,color .2s',overflowX:'hidden',maxWidth:'100vw'}}>
       <style>{css}</style>
 
-      {toast && (
-        <div style={{position:'fixed',top:16,right:16,zIndex:100,maxWidth:'calc(100vw - 32px)'}} className="ti">
-          <div style={{display:'flex',alignItems:'center',gap:9,padding:'11px 16px',borderRadius:14,background:toast.type==='error'?t.roseLight:t.emeraldLight,border:`1px solid ${toast.type==='error'?t.rose+'44':t.emerald+'44'}`,color:toast.type==='error'?t.rose:t.emerald,fontSize:13,fontWeight:600,boxShadow:t.shMd}}>
-            {toast.type==='error'?<XCircle size={15}/>:<CheckCircle size={15}/>}
-            <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{toast.msg}</span>
-          </div>
-        </div>
-      )}
+      {toast && <Toast toast={toast} t={t}/>}
 
-      {/* Header */}
+      {/* Header — no login button, just logo + tabs + theme + manage */}
       <header style={{background:t.headerBg,borderBottom:`1px solid ${t.border}`,position:'sticky',top:0,zIndex:40,boxShadow:t.sh}}>
         <div style={{maxWidth:1300,margin:'0 auto',padding:'0 16px',display:'flex',alignItems:'center',justifyContent:'space-between',height:60,gap:8,overflow:'hidden'}}>
           <div style={{display:'flex',alignItems:'center',gap:9,flexShrink:0}}>
@@ -470,17 +672,13 @@ export default function App() {
                 <Settings size={13}/>Manage
               </button>
             )}
-            {role ? (
-              <div style={{display:'flex',alignItems:'center',gap:6,background:role==='superadmin'?t.amberLight:t.emeraldLight,border:`1px solid ${role==='superadmin'?t.amber+'44':t.emerald+'44'}`,borderRadius:9,padding:'5px 9px'}}>
+            {role && (
+              <div style={{display:'flex',alignItems:'center',gap:5,background:role==='superadmin'?t.amberLight:t.emeraldLight,border:`1px solid ${role==='superadmin'?t.amber+'44':t.emerald+'44'}`,borderRadius:9,padding:'5px 9px'}}>
                 <div className="pl" style={{width:6,height:6,borderRadius:99,background:role==='superadmin'?t.amber:t.emerald,flexShrink:0}}/>
                 <button onClick={()=>{setRole(null);toast$('Signed out');}} style={{border:'none',background:'none',color:t.textMuted,cursor:'pointer',display:'flex',padding:0}}>
                   <XCircle size={13}/>
                 </button>
               </div>
-            ) : (
-              <button onClick={()=>setShowLogin(true)} className="bp" style={{display:'flex',alignItems:'center',gap:6,background:t.accent,color:'#fff',borderRadius:9,padding:'0 12px',height:34,fontSize:12,fontWeight:700,cursor:'pointer',border:'none',boxShadow:`0 4px 12px ${t.accent}45`,whiteSpace:'nowrap'}}>
-                <Lock size={13}/>Sign In
-              </button>
             )}
           </div>
         </div>
@@ -488,12 +686,49 @@ export default function App() {
 
       <main style={{maxWidth:1300,margin:'0 auto',padding:'16px 14px 120px',width:'100%'}}>
 
-        {/* Stats — 2 col grid, fits mobile perfectly */}
+        {/* ── BALANCE HERO BANNER ── */}
+        <div style={{
+          background:`linear-gradient(135deg, ${stats.balance>=0?t.accent:'#DC2626'} 0%, ${stats.balance>=0?'#7C3AED':'#991B1B'} 100%)`,
+          borderRadius:20,padding:'18px 20px',marginBottom:14,
+          boxShadow:`0 10px 36px ${stats.balance>=0?t.accent+'50':'#DC262650'}`,
+          position:'relative',overflow:'hidden'
+        }}>
+          <div style={{position:'absolute',right:-20,top:-20,width:120,height:120,borderRadius:99,background:'rgba(255,255,255,0.06)'}}/>
+          <div style={{position:'absolute',right:30,bottom:-30,width:80,height:80,borderRadius:99,background:'rgba(255,255,255,0.04)'}}/>
+          <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',gap:12,position:'relative',zIndex:1}}>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:10,fontWeight:700,color:'rgba(255,255,255,0.65)',textTransform:'uppercase',letterSpacing:'0.14em',marginBottom:6}}>Current Balance</div>
+              <div style={{fontFamily:"'Outfit',sans-serif",fontSize:28,fontWeight:800,color:'#fff',letterSpacing:'-1px',lineHeight:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                {stats.balance < 0 ? '-' : ''}₦{Math.abs(stats.balance).toLocaleString()}
+              </div>
+              <div style={{display:'flex',gap:14,marginTop:10,flexWrap:'wrap'}}>
+                <div style={{fontSize:11,color:'rgba(255,255,255,0.7)'}}>
+                  <span style={{fontWeight:700,color:'#fff'}}>₦{stats.annual.toLocaleString()}</span> collected
+                </div>
+                <div style={{fontSize:11,color:'rgba(255,255,255,0.7)'}}>
+                  <span style={{fontWeight:700,color:'#FECACA'}}>₦{stats.totalExpenses.toLocaleString()}</span> spent
+                </div>
+              </div>
+            </div>
+            <button onClick={()=>setExpenseView(true)} className="bp" style={{display:'flex',alignItems:'center',gap:6,height:38,padding:'0 14px',borderRadius:11,background:'rgba(255,255,255,0.15)',border:'1px solid rgba(255,255,255,0.25)',color:'#fff',fontSize:12,fontWeight:700,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap',backdropFilter:'blur(4px)'}}>
+              <Receipt size={13}/>Expenses
+            </button>
+          </div>
+          {/* Balance bar */}
+          {stats.annual > 0 && (
+            <div style={{marginTop:14,position:'relative',zIndex:1}}>
+              <div style={{height:5,borderRadius:99,background:'rgba(255,255,255,0.18)',overflow:'hidden'}}>
+                <div style={{height:'100%',borderRadius:99,background:'rgba(255,255,255,0.75)',width:`${balancePct}%`,transition:'width .8s cubic-bezier(.16,1,.3,1)'}}/>
+              </div>
+              <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',marginTop:5,textAlign:'right'}}>{balancePct}% remaining</div>
+            </div>
+          )}
+        </div>
+
+        {/* Stats — 2×2 grid */}
         <div style={{display:'grid',gridTemplateColumns:'repeat(2,1fr)',gap:10,marginBottom:18}}>
           <div className="ch" style={{background:t.surface,border:`1px solid ${t.border}`,borderRadius:16,padding:'13px 14px',boxShadow:t.sh}}>
-            <div style={{width:34,height:34,borderRadius:9,background:t.accentLight,display:'flex',alignItems:'center',justifyContent:'center',marginBottom:10}}>
-              <Calendar size={15} color={t.accent}/>
-            </div>
+            <div style={{width:34,height:34,borderRadius:9,background:t.accentLight,display:'flex',alignItems:'center',justifyContent:'center',marginBottom:10}}><Calendar size={15} color={t.accent}/></div>
             <select style={{fontFamily:"'Outfit',sans-serif",fontSize:17,fontWeight:800,color:t.text,background:'transparent',border:'none',cursor:'pointer',width:'100%',outline:'none'}} value={month} onChange={e=>setMonth(e.target.value)}>
               {MONTHS.map(m=><option key={m} value={m}>{m}</option>)}
             </select>
@@ -506,7 +741,7 @@ export default function App() {
               <ArrowUpRight size={12} color={t.emerald}/>
             </div>
             <div style={{fontFamily:"'Outfit',sans-serif",fontSize:16,fontWeight:800,color:t.text,letterSpacing:'-0.5px',lineHeight:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>₦{stats.mTotal.toLocaleString()}</div>
-            <div style={{fontSize:9,fontWeight:700,color:t.textMuted,textTransform:'uppercase',letterSpacing:'0.1em',marginTop:4}}>Collections</div>
+            <div style={{fontSize:9,fontWeight:700,color:t.textMuted,textTransform:'uppercase',letterSpacing:'0.1em',marginTop:4}}>This Month</div>
           </div>
 
           <div className="ch" style={{background:t.surface,border:`1px solid ${t.border}`,borderRadius:16,padding:'13px 14px',boxShadow:t.sh}}>
@@ -523,11 +758,14 @@ export default function App() {
             </div>
           </div>
 
-          <div style={{background:`linear-gradient(135deg,${t.accent} 0%,#7C3AED 100%)`,borderRadius:16,padding:'13px 14px',boxShadow:`0 8px 28px ${t.accent}45`,position:'relative',overflow:'hidden'}}>
-            <PieChart size={60} color="#ffffff12" style={{position:'absolute',right:-8,bottom:-8,transform:'rotate(20deg)'}}/>
-            <div style={{width:34,height:34,borderRadius:9,background:'rgba(255,255,255,0.15)',display:'flex',alignItems:'center',justifyContent:'center',marginBottom:10,position:'relative',zIndex:1}}><CreditCard size={15} color="#fff"/></div>
-            <div style={{fontFamily:"'Outfit',sans-serif",fontSize:16,fontWeight:800,color:'#fff',letterSpacing:'-0.5px',lineHeight:1,position:'relative',zIndex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>₦{stats.annual.toLocaleString()}</div>
-            <div style={{fontSize:9,fontWeight:700,color:'#C7D2FE',textTransform:'uppercase',letterSpacing:'0.1em',marginTop:4,position:'relative',zIndex:1}}>Annual Pool</div>
+          {/* Month expenses mini card */}
+          <div className="ch" onClick={()=>setExpenseView(true)} style={{background:t.roseLight,border:`1px solid ${t.rose}33`,borderRadius:16,padding:'13px 14px',boxShadow:t.sh,cursor:'pointer'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:10}}>
+              <div style={{width:34,height:34,borderRadius:9,background:`${t.rose}22`,display:'flex',alignItems:'center',justifyContent:'center'}}><TrendingDown size={15} color={t.rose}/></div>
+              <ArrowDownRight size={12} color={t.rose}/>
+            </div>
+            <div style={{fontFamily:"'Outfit',sans-serif",fontSize:16,fontWeight:800,color:t.rose,letterSpacing:'-0.5px',lineHeight:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>₦{stats.monthExpenses.toLocaleString()}</div>
+            <div style={{fontSize:9,fontWeight:700,color:t.rose,opacity:.7,textTransform:'uppercase',letterSpacing:'0.1em',marginTop:4}}>Spent This Month</div>
           </div>
         </div>
 
@@ -540,9 +778,7 @@ export default function App() {
           <div style={{display:'flex',gap:8,alignItems:'center'}}>
             <div style={{display:'flex',gap:3,background:t.surface,border:`1px solid ${t.border}`,borderRadius:11,padding:3,flex:1}}>
               {['all','paid','unpaid'].map(f=>(
-                <button key={f} onClick={()=>setFilt(f)} className="bp" style={{flex:1,padding:'7px 4px',borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer',border:'none',background:filt===f?t.accent:'transparent',color:filt===f?'#fff':t.textMed,transition:'all .15s',textTransform:'capitalize'}}>
-                  {f}
-                </button>
+                <button key={f} onClick={()=>setFilt(f)} className="bp" style={{flex:1,padding:'7px 4px',borderRadius:8,fontSize:12,fontWeight:700,cursor:'pointer',border:'none',background:filt===f?t.accent:'transparent',color:filt===f?'#fff':t.textMed,transition:'all .15s',textTransform:'capitalize'}}>{f}</button>
               ))}
             </div>
             <button onClick={exportCSV} className="bp" style={{display:'flex',alignItems:'center',gap:6,height:44,padding:'0 14px',borderRadius:12,border:`1px solid ${t.border}`,background:t.surface,color:t.textMed,fontSize:13,fontWeight:600,cursor:'pointer',flexShrink:0,whiteSpace:'nowrap'}}>
@@ -564,20 +800,14 @@ export default function App() {
               const amount = data[person.id]?.[month]||0;
               const isPaid = amount > 0;
               return (
-                <div key={person.id} className="ch" style={{background:t.surface,border:`1px solid ${isPaid?t.emerald+'33':t.border}`,borderRadius:15,padding:'14px',position:'relative'}}>
+                <div key={person.id} className="ch" style={{background:t.surface,border:`1px solid ${isPaid?t.emerald+'33':t.border}`,borderRadius:15,padding:'14px'}}>
                   <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:11}}>
-                    <div style={{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Outfit',sans-serif",fontSize:12,fontWeight:800,background:isPaid?t.emeraldLight:t.surfaceAlt,color:isPaid?t.emerald:t.textMuted,flexShrink:0}}>
-                      {person.initials}
-                    </div>
+                    <div style={{width:40,height:40,borderRadius:11,display:'flex',alignItems:'center',justifyContent:'center',fontFamily:"'Outfit',sans-serif",fontSize:12,fontWeight:800,background:isPaid?t.emeraldLight:t.surfaceAlt,color:isPaid?t.emerald:t.textMuted,flexShrink:0}}>{person.initials}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontSize:13,fontWeight:700,color:t.text,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',lineHeight:1.3}}>{person.name}</div>
                       <div style={{fontSize:10,fontWeight:600,color:t.textMuted,marginTop:2}}>#{String(person.id).slice(-4)}</div>
                     </div>
-                    {isPaid && (
-                      <div style={{width:20,height:20,borderRadius:99,background:t.emerald,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}>
-                        <Check size={11} color="#fff" strokeWidth={3}/>
-                      </div>
-                    )}
+                    {isPaid && <div style={{width:20,height:20,borderRadius:99,background:t.emerald,display:'flex',alignItems:'center',justifyContent:'center',flexShrink:0}}><Check size={11} color="#fff" strokeWidth={3}/></div>}
                   </div>
                   <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',paddingTop:10,borderTop:`1px solid ${t.border}`}}>
                     <span style={{fontSize:9,fontWeight:700,color:t.textMuted,textTransform:'uppercase',letterSpacing:'0.08em'}}>Contribution</span>
@@ -621,18 +851,12 @@ export default function App() {
                   const annual = MONTHS.reduce((s,m)=>s+(data[person.id]?.[m]||0),0);
                   return (
                     <tr key={person.id} className="rh" style={{background:i%2===0?'transparent':`${t.surfaceAlt}55`,transition:'background .1s'}}>
-                      <td style={{padding:'10px 14px',fontSize:12,fontWeight:600,color:t.text,borderBottom:`1px solid ${t.border}`,position:'sticky',left:0,background:i%2===0?t.surface:t.surfaceAlt,zIndex:1,whiteSpace:'nowrap',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>
-                        {person.name}
-                      </td>
+                      <td style={{padding:'10px 14px',fontSize:12,fontWeight:600,color:t.text,borderBottom:`1px solid ${t.border}`,position:'sticky',left:0,background:i%2===0?t.surface:t.surfaceAlt,zIndex:1,whiteSpace:'nowrap',maxWidth:160,overflow:'hidden',textOverflow:'ellipsis'}}>{person.name}</td>
                       {MONTHS.map(m=>{
                         const v=data[person.id]?.[m]||0;
-                        return <td key={m} style={{padding:'10px 9px',textAlign:'right',fontSize:11,fontWeight:v>0?600:400,color:v>0?t.emerald:t.textMuted,borderBottom:`1px solid ${t.border}`,background:m===month?`${t.accent}06`:'transparent',whiteSpace:'nowrap'}}>
-                          {v>0?`₦${v.toLocaleString()}`:'—'}
-                        </td>;
+                        return <td key={m} style={{padding:'10px 9px',textAlign:'right',fontSize:11,fontWeight:v>0?600:400,color:v>0?t.emerald:t.textMuted,borderBottom:`1px solid ${t.border}`,background:m===month?`${t.accent}06`:'transparent',whiteSpace:'nowrap'}}>{v>0?`₦${v.toLocaleString()}`:'—'}</td>;
                       })}
-                      <td style={{padding:'10px 12px',textAlign:'right',fontFamily:"'Outfit',sans-serif",fontSize:12,fontWeight:800,color:t.accentText,borderBottom:`1px solid ${t.border}`,background:`${t.accent}08`,position:'sticky',right:0,zIndex:1,whiteSpace:'nowrap'}}>
-                        ₦{annual.toLocaleString()}
-                      </td>
+                      <td style={{padding:'10px 12px',textAlign:'right',fontFamily:"'Outfit',sans-serif",fontSize:12,fontWeight:800,color:t.accentText,borderBottom:`1px solid ${t.border}`,background:`${t.accent}08`,position:'sticky',right:0,zIndex:1,whiteSpace:'nowrap'}}>₦{annual.toLocaleString()}</td>
                     </tr>
                   );
                 })}
@@ -649,6 +873,9 @@ export default function App() {
             <Icon size={17}/>
           </button>
         ))}
+        <button onClick={()=>setExpenseView(true)} className="bp" style={{width:42,height:42,borderRadius:99,display:'flex',alignItems:'center',justifyContent:'center',background:'transparent',color:'#F87171',border:'none',cursor:'pointer',transition:'all .15s'}}>
+          <Receipt size={17}/>
+        </button>
         {role==='superadmin' && (
           <>
             <div style={{width:1,height:20,background:'rgba(255,255,255,0.12)',margin:'0 2px'}}/>
@@ -668,7 +895,7 @@ export default function App() {
 
       {/* Login bottom sheet */}
       {showLogin && (
-        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.6)',backdropFilter:'blur(8px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&setShowLogin(false)}>
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.65)',backdropFilter:'blur(10px)',zIndex:60,display:'flex',alignItems:'flex-end',justifyContent:'center'}} onClick={e=>e.target===e.currentTarget&&setShowLogin(false)}>
           <div className="su" style={{background:t.surface,borderRadius:'22px 22px 0 0',width:'100%',maxWidth:520,boxShadow:t.shLg}}>
             <div style={{background:'linear-gradient(135deg,#1E1B4B,#4338CA)',padding:'20px 20px 16px',borderRadius:'22px 22px 0 0'}}>
               <div style={{display:'flex',alignItems:'center',justifyContent:'space-between'}}>
@@ -697,7 +924,19 @@ export default function App() {
         </div>
       )}
 
-      <Modals/>
+      <MemberModals/>
+    </div>
+  );
+}
+
+// Toast component
+function Toast({ toast, t }) {
+  return (
+    <div style={{position:'fixed',top:16,right:16,zIndex:100,maxWidth:'calc(100vw - 32px)',animation:'ti .3s cubic-bezier(.16,1,.3,1)'}}>
+      <div style={{display:'flex',alignItems:'center',gap:9,padding:'11px 16px',borderRadius:14,background:toast.type==='error'?t.roseLight:t.emeraldLight,border:`1px solid ${toast.type==='error'?t.rose+'44':t.emerald+'44'}`,color:toast.type==='error'?t.rose:t.emerald,fontSize:13,fontWeight:600,boxShadow:t.shMd}}>
+        {toast.type==='error'?<XCircle size={15}/>:<CheckCircle size={15}/>}
+        <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{toast.msg}</span>
+      </div>
     </div>
   );
 }
